@@ -73,10 +73,10 @@ def PDE(PARM, init_cond, measure):
 
     if init_cond == 0:
         # initial condition, F[i, 1] = 1 for i in 0:199. F[:,1+] are populated iteratively
-        mat = np.ones((200,61)) # why 61 the magic number
+        mat = np.ones((200,61)) # why not 60, 5*12 months
     elif init_cond == 1:
         # initial condition, G[i, 1] = exp(A[i]) for i in 0:199. G[:,1+] are populated iteratively
-        mat = np.ones((200,61)) # why 61 the magic number
+        mat = np.ones((200,61)) 
         mat[:,0] = XX
 
 
