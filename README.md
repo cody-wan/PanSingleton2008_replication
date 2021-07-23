@@ -181,7 +181,7 @@ for i in range(199):
 
 ## Likelihood function
 
-There are (mainly) three components in the likelihood function, each with the following distribution:
+There are (mainly) three components in the likelihood function, each having a normal distribution:
 
 **1. interpolated 1 year CDS spread under Q measure**
 
@@ -207,6 +207,32 @@ XM = np.log(XLAMM) * np.exp(-1 * BETH /12.) + ALPH/BETH * (1 - np.exp(-1 * BETH 
 # variance
 V = SIG * SIG / (2 * BETH) * (1 - np.exp(-2 * BETH / 12))
 #log likelihood
+TOTAL = TOTAL -0.5 * np.log(2 * np.pi * V) -1 * (np.log(xlam) - XM)**2 / (2 * V)
 ```
+Since the default intensity process is a mean-reversion Ornstein-Uhlenbeck (OU) process, its distribution can be given in the following standard notation (see, [for instance](http://math.stanford.edu/~papanico/pubftp/meanrev8.pdf)):
+Suppose 
+\[
+\begin{aligned}
+d Y_{t} &=\alpha\left(m-Y_{t}\right) d t+\beta d \hat{Z}_{t} \\
+\end{aligned}
+\] then
+\[
+Y_{t}-Y_{0} \cdot e^{-\alpha t} \sim \mathcal{N}\left(m\left(1-e^{-\alpha t}\right), \frac{\beta^{2}}{2 \alpha}\left(1-e^{-2 \alpha t}\right)\right)
+\] Recall 
+\[
+\begin{aligned}
+d \ln \lambda_{t}
+:&= (\text{ALP} - \text{BET}\ln \lambda_t) dt + \text{SIG} dB_t \\
+&= \text{BET}(\frac{\text{ALP}}{\text{BET}}-\ln \lambda_t)dt + \text{SIG}dB_t
+\end{aligned} 
+\] then, 
+\[
+ln \lambda_t \sim \mathcal{N}\left(\ln \lambda_t e^{-\frac{\text{BET}}{12}} + \frac{\text{ALP}}{\text{BET}}(1 - e^{-\frac{\text{BET}}{12}}), \frac{\text{SIG}^2}{2\text{BET}}(1 - e^{-2\frac{\text{BET}}{12}}) \right)
+\] Note: the time step is 1/12 monthly, and the mapping between two notations is $\alpha=\text{BET}, m=\frac{\text{ALP}}{\text{BET}}, \beta=\text{SIG}$.
 
+**4. `derive`**
 
+```python
+TOTAL = TOTAL - np.log(deriv)
+```
+Not entirely sure yet why this is part of the likelihood function. See TODO #2 at front of page. 
