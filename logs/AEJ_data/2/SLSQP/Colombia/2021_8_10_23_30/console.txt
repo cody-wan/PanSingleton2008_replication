@@ -1,0 +1,6 @@
+writing to logs/AEJ_data/2/SLSQP/Colombia/2021_8_10_23_30
+Optimization terminated successfully    (Exit mode 0)
+            Current function value: -756.0094220292664
+            Iterations: 35
+            Function evaluations: 387
+            Gradient evaluations: 31

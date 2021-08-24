@@ -1,0 +1,6 @@
+writing to logs/1/SLSQP/Bulgaria/2021_8_4_19_20
+Inequality constraints incompatible    (Exit mode 4)
+            Current function value: 466717.0212476628
+            Iterations: 1
+            Function evaluations: 8
+            Gradient evaluations: 1

@@ -1,0 +1,6 @@
+writing to logs/EXT_data/1/SLSQP/Malaysia/2021_8_20
+Optimization terminated successfully    (Exit mode 0)
+            Current function value: -1503.3082903947031
+            Iterations: 28
+            Function evaluations: 311
+            Gradient evaluations: 24

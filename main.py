@@ -1,53 +1,79 @@
+from numba.np.ufunc import parallel
 import numpy as np 
 import pandas as pd 
 import pathlib 
+import numba
 from scipy.linalg import solve_banded
 from scipy.optimize import minimize, Bounds
 from datetime import datetime
-# from optimparallel import minimize_parallel
+from scipy import sparse
 
-country_names = ['Brazil', 'Bulgaria', 'Chile', 'China', 'Colombia', 
-               'Croatia', 'Korea', 'Malaysia', 'Mexico', 'Philippines', 
-               'Poland', 'Russia', 'SAfrica', 'Thailand', 'Turkey']
-
-# read data and add country index header
-num_countries=15
-CDS1Y = pd.read_csv('inputs/CDS1Y.txt', delimiter = "\t", index_col=False, names=[i for i in range(num_countries)], dtype=float)/10000
-CDS3Y = pd.read_csv('inputs/CDS3Y.txt', delimiter = "\t", index_col=False, names=[i for i in range(num_countries)], dtype=float)/10000
-CDS5Y = pd.read_csv('inputs/CDS5Y.txt', delimiter = "\t", index_col=False, names=[i for i in range(num_countries)], dtype=float)/10000
-# read TPFILE
-PFILE = pd.read_csv('inputs/TPFILE', delimiter = "     ", header=None, dtype=float, engine='python').values
+# countries to be included in estimation:
+TOTAL_COUNTRY_NAMES = ['Brazil', 'Bulgaria', 'Chile', 'China', 'Colombia', 
+                       'Croatia', 'Korea', 'Malaysia', 'Mexico', 'Philippines', 
+                       'Poland', 'Russia', 'SAfrica', 'Thailand', 'Turkey']
 
 
 # helper functions
+@numba.jit(nopython=True)
 def diagonal_form(a, upper=1, lower=1):
     """
         a is a numpy square matrix
         this function converts a square matrix to diagonal ordered form
         returned matrix in ab shape which can be used directly for scipy.linalg.solve_banded
     """
-    n = a.shape[1]
-    assert(np.all(a.shape ==(n,n)))
+    n = np.shape(a)[1]
+    # assert(np.all(a.shape ==(n,n)))
     
     ab = np.zeros((2*n-1, n))
     
-    for i in range(n):
-        ab[i,(n-1)-i:] = np.diagonal(a,(n-1)-i)
+    for i in np.arange(n):
+        ab[i,(n-1)-i:] = np.diag(a,(n-1)-i)
         
-    for i in range(n-1): 
-        ab[(2*n-2)-i,:i+1] = np.diagonal(a,i-(n-1))
+    for i in np.arange(n-1): 
+        ab[(2*n-2)-i,:i+1] = np.diag(a,i-(n-1))
 
-    mid_row_inx = int(ab.shape[0]/2)
-    upper_rows = [mid_row_inx - i for i in range(1, upper+1)]
-    upper_rows.reverse()
-    upper_rows.append(mid_row_inx)
-    lower_rows = [mid_row_inx + i for i in range(1, lower+1)]
-    keep_rows = upper_rows+lower_rows
-    ab = ab[keep_rows,:]
+    mid_row_inx = np.int(ab.shape[0]/2)
 
-    return ab
+    upper_rows = np.array([mid_row_inx - i for i in np.arange(start=1, stop=upper+1)])
+    upper_rows = np.flip(upper_rows)
+    upper_rows = np.append(upper_rows, mid_row_inx)
 
-def PDE(PARM, init_cond, measure):
+    lower_rows = np.array([mid_row_inx + i for i in np.arange(start=1, stop=lower+1)])
+
+    keep_rows = np.append(upper_rows, lower_rows) 
+
+    return ab[keep_rows,:]
+
+
+@numba.jit(nopython=True)
+def construct_B(ALP, BET, XSTEP, TSTEP, SIG, X, XB_FLAG):
+    """
+        XB_FLAG: T/F; T: use X[99] same as fortran code, F: use X[199], mathematically correct
+    """
+
+    B = np.zeros((200,200))
+    # edge values
+    B[0, 0] = -(ALP - BET * X[0]) / XSTEP - np.exp(X[0]) - 1/TSTEP
+    B[0, 1] = (ALP - BET * X[0]) / XSTEP
+
+    if XB_FLAG:
+        B[199, 198] = -(ALP - BET * X[99]) / XSTEP
+        B[199, 199] = (ALP - BET * X[99]) / XSTEP - np.exp(X[99]) - 1/TSTEP
+    else:
+        B[199, 198] = -(ALP - BET * X[199]) / XSTEP
+        B[199, 199] = (ALP - BET * X[199]) / XSTEP - np.exp(X[199]) - 1/TSTEP
+
+
+    for I in range(1, 199):
+        B[I, I-1] = SIG**2 / (2 * XSTEP**2) - (ALP - BET*X[I]) / (2 * XSTEP)
+        B[I, I] = -SIG**2 / XSTEP**2 - np.exp(X[I]) - 1/TSTEP
+        B[I, I+1] = SIG**2 / (2 * XSTEP**2) + (ALP - BET*X[I]) / (2 * XSTEP)
+    
+    return B
+
+
+def PDE(PARM, init_cond, measure, XB_FLAG):
     """
         PDE: solve PDE via finite difference
         args:
@@ -68,95 +94,98 @@ def PDE(PARM, init_cond, measure):
 
     SIG = PARM[2]
 
-    X = np.array([np.log(XLOWER) + XSTEP * float(i) for i in range(200)])
+    X = np.array([np.log(XLOWER) + XSTEP * float(i) for i in np.arange(200)])
     XX = np.exp(X)
 
     if init_cond == 0:
         # initial condition, F[i, 1] = 1 for i in 0:199. F[:,1+] are populated iteratively
-        mat = np.ones((200,61)) # why not 60, 5*12 months
+        mat = np.ones((200,61)) 
     elif init_cond == 1:
         # initial condition, G[i, 1] = exp(A[i]) for i in 0:199. G[:,1+] are populated iteratively
         mat = np.ones((200,61)) 
         mat[:,0] = XX
 
 
-    for IT in range(1, 61):
-        B = np.zeros((200,200))
-        A = np.array([ -1 * mat[i, IT-1] / TSTEP for i in range(200)])
-        
-        # edge values
-        B[0, 0] = -(ALP - BET * X[0]) / XSTEP - np.exp(X[0]) - 1/TSTEP
-        B[0, 1] = (ALP - BET * X[0]) / XSTEP
-        B[199, 198] = -(ALP - BET * X[99]) / XSTEP
-        B[199, 199] = (ALP - BET * X[99]) / XSTEP - np.exp(X[99]) - 1/TSTEP
+    for IT in np.arange(start=1, stop=61):
 
-        for I in range(1, 199):
-            B[I, I-1] = SIG**2 / (2 * XSTEP**2) - (ALP - BET*X[I]) / (2 * XSTEP)
-            B[I, I] = -SIG**2 / XSTEP**2 - np.exp(X[I]) - 1/TSTEP
-            B[I, I+1] = SIG**2 / (2 * XSTEP**2) + (ALP - BET*X[I]) / (2 * XSTEP)
-        
+        A = np.array([ -1 * mat[i, IT-1] / TSTEP for i in np.arange(200)])
+        B = construct_B(ALP, BET, XSTEP, TSTEP, SIG, X, XB_FLAG)
+
         # solve for x in Bx=A
+        # 1. solve via solve_banded()
         ab = diagonal_form(B)
-
         res = solve_banded((1,1), ab, A)
 
-        for i in range(200):
+        # 2. solve via least square; takes twice as much time as #1
+        # res = np.linalg.lstsq(B, A)[0]
+
+        for i in np.arange(200):
             mat[i, IT] = res[i]
 
     return mat, XX
 
+@numba.jit(nopython=True)
+def construct_CDS(PFILE, WR, ICAR_2, F, G):
 
-def EVAL(PARM, ICAR_2, measure, WR=0.75):
+    CDS1T = np.zeros(200)
+    CDS3T = np.zeros(200)
+    CDS5T = np.zeros(200)
+
+    for i in np.arange(200):
+
+        CDS1_sum1, CDS1_sum2 = 0, 0
+        CDS3_sum1, CDS3_sum2 = 0, 0
+        CDS5_sum1, CDS5_sum2 = 0, 0
+
+        for j in np.arange(1, 20+1):
+            # 1 YR CDS
+            if j <= 4:
+                CDS1_sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
+                CDS1_sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
+            # 3 YR CDS
+            if j <= 12:
+                CDS3_sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
+                CDS3_sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
+            # 5 YR CDS
+            if j <= 20:
+                CDS5_sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
+                CDS5_sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
+
+        CDS1T[i] = WR * CDS1_sum2 / CDS1_sum1
+        CDS3T[i] = WR * CDS3_sum2 / CDS3_sum1
+        CDS5T[i] = WR * CDS5_sum2 / CDS5_sum1
+    
+    return CDS1T, CDS3T, CDS5T
+
+
+def EVAL(PFILE, PARM, ICAR_2, measure, XB_FLAG, WR=0.75):
     """
         EVAL: evaluates model value of CDS1, CDS3 and CDS5
         args: PARM: parameters
               ICAR_2: time indicator
     """    
 
-    F, X = PDE(PARM, init_cond=0, measure=measure)
-    G, _ = PDE(PARM, init_cond=1, measure=measure)
+    F, X = PDE(PARM, init_cond=0, measure=measure, XB_FLAG=XB_FLAG)
+    G, _ = PDE(PARM, init_cond=1, measure=measure, XB_FLAG=XB_FLAG)
 
-
-    CDS1T, CDS3T, CDS5T = [], [], []
-    for i in range(200):
-        # 1 YR CDS
-        sum1, sum2 = 0, 0
-        for j in range(1, 4+1):
-            sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
-            sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
-        CDS1T.append(WR * sum2 / sum1)
-
-        # 3 YR CDS
-        sum1, sum2 = 0, 0
-        for j in range(1, 12+1):
-            sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
-            sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
-        CDS3T.append(WR * sum2 / sum1)
-
-        # 5 YR CDS
-        sum1, sum2 = 0, 0
-        for j in range(1, 20+1):
-            sum1 += PFILE[ICAR_2, 13*j - 1] * F[i, 1+j*3 - 1]
-            sum2 += PFILE[ICAR_2, 13*j - 1] * G[i, 1+j*3 - 1]
-        CDS5T.append(WR * sum2 / sum1)
+    CDS1T, CDS3T, CDS5T = construct_CDS(PFILE, WR, ICAR_2, F, G)
 
     return X, CDS1T, CDS3T, CDS5T
 
-
+@numba.jit(nopython=True)
 def XINTP(CDS3, X, CDS1T, CDS3T, CDS5T):
     """
         interpolates CDS prices to match market data under Q measure
     """
-
     # default values
     xlam=X[199]
     cds1x=CDS1T[199]
     cds3x=CDS3T[199]
     cds5x=CDS5T[199]
     # not exactly sure what the default value is in their fortran 77 code
-    deriv=1
+    deriv=(CDS3T[199] - CDS3T[198]) / (np.log(X[199]) - np.log(X[198]))
 
-    for i in range(199):
+    for i in np.arange(199):
         if ((CDS3 >= CDS3T[i]) and (CDS3 <= CDS3T[i+1])):
             weight = (CDS3 - CDS3T[i]) / (CDS3T[i+1] - CDS3T[i])
             xlam = (1 - weight) * X[i] + weight * X[i+1]
@@ -170,6 +199,7 @@ def XINTP(CDS3, X, CDS1T, CDS3T, CDS5T):
     
     return xlam, cds1x, cds3x, cds5x, deriv
 
+@numba.jit(nopython=True)
 def XINTPP(X, XLAM, CDS1T, CDS3T, CDS5T):
     """
         interpolates CDS prices to match market data under P measure
@@ -181,7 +211,7 @@ def XINTPP(X, XLAM, CDS1T, CDS3T, CDS5T):
     cds3x=CDS3T[199]
     cds5x=CDS5T[199]
 
-    for i in range(199):
+    for i in np.arange(199):
         if ((XLAM >= X[i]) and (XLAM <= X[i+1])):
             weight = (XLAM - X[i]) / (X[i+1] - X[i])
             cds1x = (1 - weight) * CDS1T[i] + weight * CDS1T[i+1]
@@ -192,10 +222,20 @@ def XINTPP(X, XLAM, CDS1T, CDS3T, CDS5T):
     
     return cds1x, cds3x, cds5x
 
-def FUNC(PARM, ICAR_1=0, logging=True, log_file_path='logs/log.csv', print_flag=False, test_flag=False):
+
+def FUNC_NLLK(PARM, CDS1Y, CDS3Y, CDS5Y, PFILE, country_name, 
+                        XB_FLAG, LN_FLAG, 
+                        logging=True, log_file_path='logs/log.csv', print_flag=False, CDSLog_flag=False, CDSLog_path="outputs"):
     """
         FUNC: solves CDS spreads PDE, interpolates model spreads, returns negative log likelihood
+        args:
+            PARM: theta; 
+            ICAR_1: country indicator
+            LN_FLAG: boolean; T: include `ln(derive)` in log-likelihood, F: no
     """
+
+    # prepare data for FUNC_NLLK
+    # 1. date-aligned CDS 1Y, 3Y, 5Y data
 
     resQ, resP = [], []
 
@@ -216,18 +256,18 @@ def FUNC(PARM, ICAR_1=0, logging=True, log_file_path='logs/log.csv', print_flag=
     if(BETH <= 0):
         SIG=0.001
 
-    PARM = [ALP, BET, SIG, ALPH, BETH, SIG1, SIG2]
+    PARM = np.array([ALP, BET, SIG, ALPH, BETH, SIG1, SIG2])
 
     TOTAL, TOTALL = 0, 0
-    # time indicator, iterate 0:84
-    for ICAR_2 in range(85):
+ 
+    for ICAR_2 in range(len(CDS1Y)):
         # read market CDS data
-        cds1 = CDS1Y.values[ICAR_2,ICAR_1]
-        cds3 = CDS3Y.values[ICAR_2,ICAR_1]
-        cds5 = CDS5Y.values[ICAR_2,ICAR_1]
+        cds1 = CDS1Y[ICAR_2]
+        cds3 = CDS3Y[ICAR_2]
+        cds5 = CDS5Y[ICAR_2]
 
         # get model CDS values under Q measure
-        X, CDS1T, CDS3T, CDS5T = EVAL(PARM, ICAR_2, measure='Q')
+        X, CDS1T, CDS3T, CDS5T = EVAL(PFILE, PARM, ICAR_2, measure='Q', XB_FLAG=XB_FLAG)
         # interpolate to match market data under Q measure
         xlam, cds1x, cds3x, cds5x, deriv = XINTP(cds3, X, CDS1T, CDS3T, CDS5T)
         resQ.append([xlam, cds1x, cds3x, cds5x, deriv])
@@ -235,7 +275,7 @@ def FUNC(PARM, ICAR_1=0, logging=True, log_file_path='logs/log.csv', print_flag=
         TOTALL += (cds1 - cds1x)**2 + (cds3 - cds3x)**2 + (cds5 - cds5x)**2
 
         # get model CDS values under P measure
-        X, CDS1TP, CDS3TP, CDS5TP = EVAL(PARM, ICAR_2, measure='P')
+        X, CDS1TP, CDS3TP, CDS5TP = EVAL(PFILE, PARM, ICAR_2, measure='P', XB_FLAG=XB_FLAG)
         # interpolate to match market data under P measure
         cds1xp, cds3xp, cds5xp = XINTPP(X, xlam, CDS1TP, CDS3TP, CDS5TP)
         resP.append([cds1xp, cds3xp, cds5xp])
@@ -251,36 +291,124 @@ def FUNC(PARM, ICAR_1=0, logging=True, log_file_path='logs/log.csv', print_flag=
         XM = np.log(XLAMM) * np.exp(-1 * BETH /12.) + ALPH/BETH * (1 - np.exp(-1 * BETH / 12.))
 
         # log likelihood
-        TOTAL = TOTAL -0.5 * np.log(2 * np.pi * SIG1**2) \
-                    - ER1 * ER1 / (2 * SIG1**2) \
-                    - 0.5 * np.log(2 * np.pi * SIG2**2) \
-                    - ER2 * ER2 / (2 * SIG2**2) \
-                    -0.5 * np.log(2 * np.pi * V) \
-                    -1 * (np.log(xlam) - XM)**2 / (2 * V) -1 * np.log(deriv)
+        if LN_FLAG:
+            TOTAL = TOTAL -0.5 * np.log(2 * np.pi * SIG1**2) \
+                        - ER1 * ER1 / (2 * SIG1**2) \
+                        - 0.5 * np.log(2 * np.pi * SIG2**2) \
+                        - ER2 * ER2 / (2 * SIG2**2) \
+                        -0.5 * np.log(2 * np.pi * V) \
+                        -1 * (np.log(xlam) - XM)**2 / (2 * V) -1 * np.log(deriv)
+        else:
+            TOTAL = TOTAL -0.5 * np.log(2 * np.pi * SIG1**2) \
+                        - ER1 * ER1 / (2 * SIG1**2) \
+                        - 0.5 * np.log(2 * np.pi * SIG2**2) \
+                        - ER2 * ER2 / (2 * SIG2**2) \
+                        -0.5 * np.log(2 * np.pi * V) \
+                        -1 * (np.log(xlam) - XM)**2 / (2 * V) # -1 * np.log(deriv)
         
         XLAMM = xlam
 
-    FVALL = TOTALL / (3 * 85)
+    FVALL = TOTALL / (3 * len(CDS1Y))
     FVALL = FVALL**0.5
     FVAL = -TOTAL
 
-    if test_flag:
+    # write model CDS spreads
+    if CDSLog_flag:
         XLAM, CDS1X, CDS3X, CDS5X, DERIV = np.array(resQ).T
         CDS1XP, CDS3XP, CDS5XP = np.array(resP).T
-        CDS_df = pd.DataFrame.from_dict(dict(XLAM=XLAM, CDS1Y=CDS1Y[ICAR_1], CDS1X=CDS1X, CDS1XP=CDS1XP, 
-                                    CDS3=CDS3Y[ICAR_1], CDS3X=CDS3X, CDS3XP=CDS3XP, 
-                                    CDS5=CDS5Y[ICAR_1], CDS5X=CDS5X, CDS5XP=CDS5XP))
-        CDS_df.to_csv(f"outputs/{country_names[ICAR_1]}_CDS.csv", index=False)
+        CDS_df = pd.DataFrame.from_dict(dict(XLAM=XLAM, CDS1Y=CDS1Y, CDS1X=CDS1X, CDS1XP=CDS1XP, 
+                                    CDS3=CDS3Y, CDS3X=CDS3X, CDS3XP=CDS3XP, 
+                                    CDS5=CDS5Y, CDS5X=CDS5X, CDS5XP=CDS5XP))
+        CDS_df.to_csv(f"{CDSLog_path}/{country_name}_CDS.csv", index=False)
 
+    # write parameter value (at each function call/iteration)
     if logging:
         with open(log_file_path, "a") as f:
+            now = datetime.now()
+            f.write(f"{now.year}_{now.month}_{now.day}_{now.hour}_{now.minute},")
             f.write(",".join(map(str,PARM)))
             f.write(f", {FVAL}, {FVALL}\n")
-    
+    # print out parameter value in console
     if print_flag:
         print(f'{PARM},{FVAL}, {FVALL}')
 
     return FVAL # negative log likelihood (to be minimized)
+
+
+
+def find_overlap(ICAR_1, DATA_V):
+    """
+        return largest subset of data where all CDS1Y, CDS3Y, CDS5Y and PFILE data are available
+    """
+
+    CDS1Y = pd.read_csv(f'inputs/{DATA_V}/CDS1Y.csv', index_col=0, parse_dates=[0]).dropna(axis=1, how='all')/10000
+    CDS3Y = pd.read_csv(f'inputs/{DATA_V}/CDS3Y.csv', index_col=0, parse_dates=[0]).dropna(axis=1, how='all')/10000
+    CDS5Y = pd.read_csv(f'inputs/{DATA_V}/CDS5Y.csv', index_col=0, parse_dates=[0]).dropna(axis=1, how='all')/10000
+
+    # NOTE: make sure first len(TOTAL_COUNTRY_NAMES) countries in CDS files are the same as TOTAL_COUNTRY_NAMES
+    CDS1Y.columns = TOTAL_COUNTRY_NAMES + list(CDS1Y.columns[len(TOTAL_COUNTRY_NAMES):])
+    CDS3Y.columns = TOTAL_COUNTRY_NAMES + list(CDS3Y.columns[len(TOTAL_COUNTRY_NAMES):])
+    CDS5Y.columns = TOTAL_COUNTRY_NAMES + list(CDS5Y.columns[len(TOTAL_COUNTRY_NAMES):])
+
+    country_names = [val for val in CDS1Y.columns.tolist() if val in CDS3Y.columns.tolist() and val in CDS5Y.columns.tolist()]
+
+    if ICAR_1 > len(country_names):
+        return 0, 0, 0, 0, "NA"
+
+    # read 1Y, 3Y, 5Y market CDS data
+    # take subset where data of all tenors are available
+    country = country_names[ICAR_1]
+
+    CDS1Y_t0 = CDS1Y[country].first_valid_index()
+    CDS3Y_t0 = CDS3Y[country].first_valid_index()
+    CDS5Y_t0 = CDS5Y[country].first_valid_index()
+
+    CDS1Y_t1 = CDS1Y[country].last_valid_index()
+    CDS3Y_t1 = CDS3Y[country].last_valid_index()
+    CDS5Y_t1 = CDS5Y[country].last_valid_index()
+
+    # PFILE
+    PFILE = pd.read_csv(f"inputs/{DATA_V}/PFILE.csv", index_col=0, parse_dates=[0])
+    P_t0, P_t1 = PFILE.index[0], PFILE.index[len(PFILE)-1]
+
+    t0, t1 = max(max(max(CDS1Y_t0, CDS3Y_t0), CDS5Y_t0), P_t0), min(min(min(CDS1Y_t1, CDS3Y_t1), CDS5Y_t1), P_t1)
+
+    return CDS1Y, CDS3Y, CDS5Y, PFILE, country, t0, t1
+
+
+def get_input(ICAR_1, DATA_V):
+    """
+        prepare input for FUNC_NLLK
+
+        return:
+            1Y, 3Y, 5Y CDS list
+            PFILE: corresponding discounting values
+            country_name
+    """
+
+    if DATA_V == "AEJ_data":
+        # read data and add country index header
+
+        CDS1Y = pd.read_csv(f'inputs/{DATA_V}/CDS1Y.TXT', delimiter = "\t", index_col=False, names=[i for i in range(len(TOTAL_COUNTRY_NAMES))], dtype=float)/10000
+        CDS3Y = pd.read_csv(f'inputs/{DATA_V}/CDS3Y.TXT', delimiter = "\t", index_col=False, names=[i for i in range(len(TOTAL_COUNTRY_NAMES))], dtype=float)/10000
+        CDS5Y = pd.read_csv(f'inputs/{DATA_V}/CDS5Y.TXT', delimiter = "\t", index_col=False, names=[i for i in range(len(TOTAL_COUNTRY_NAMES))], dtype=float)/10000
+        # read TPFILE
+        PFILE = pd.read_csv(f'inputs/{DATA_V}/TPFILE', delimiter = "     ", header=None, dtype=float, engine='python').values
+
+
+        return CDS1Y.values[:,ICAR_1], CDS3Y.values[:,ICAR_1], CDS5Y.values[:,ICAR_1], PFILE, TOTAL_COUNTRY_NAMES[ICAR_1]
+    
+    else: # "AEJ_data", "Test_data", etc
+        CDS1Y, CDS3Y, CDS5Y, PFILE, country, t0, t1 = find_overlap(ICAR_1=ICAR_1, DATA_V=DATA_V)
+
+        print(f"{country} {t0.year}-{t0.month}-{t0.day} - {t1.year}-{t1.month}-{t1.day} # obs: {len(PFILE.loc[t0:t1])}")
+
+        return CDS1Y[country].loc[t0: t1].values, \
+               CDS3Y[country].loc[t0: t1].values, \
+               CDS5Y[country].loc[t0: t1].values, \
+               PFILE.loc[t0: t1].values, \
+               country
+
 
 
 if __name__ == '__main__':
@@ -311,7 +439,12 @@ if __name__ == '__main__':
     XLB = [-7, -2, 0.0001, -7, 0.0001, 0.00001, 0.00001]
 
     for country_i in range(1):
-        FUNC(PARM=XGUESSES[country_i], ICAR_1=country_i, logging=False, log_file_path="", print_flag=True, test_flag=True)
+        CDS1Y, CDS3Y, CDS5Y, PFILE, country_name = get_input(country_i, DATA_V="EXT_data")
+        # use AEJ's discount value
+        # PFILE = pd.read_csv(f'inputs/AEJ_data/TPFILE', delimiter = "     ", header=None, dtype=float, engine='python').values
+        if not country_name == 'NA':
+            FUNC_NLLK(PARM=XGUESSES[country_i], CDS1Y=CDS1Y, CDS3Y=CDS3Y, CDS5Y=CDS5Y, PFILE=PFILE, country_name=country_name,
+                        XB_FLAG=1, LN_FLAG=1, logging=False, log_file_path="", print_flag=True, CDSLog_flag=False)
 
     exit(0)
 
@@ -339,7 +472,7 @@ if __name__ == '__main__':
         f.write(f"\tstart time: {now}\n")
 
     # res = minimize_parallel(FUNC, args=(country_i, True, full_log_path, False, False), x0=XGUESS, bounds=Bounds(lb=XLB, ub=XUB), options=dict(maxiter=5000, ftol=1e-5))
-    res = minimize(FUNC, args=(country_i, True, full_log_path, False, False), x0=[3.5, -0.8, 0.7, -3.4, 0.6, 0.006, 0.004], method=method, bounds=Bounds(lb=XLB, ub=XUB), options=method_options[method])
+    res = minimize(FUNC_NLLK, args=(country_i, True, full_log_path, False, False), x0=[3.5, -0.8, 0.7, -3.4, 0.6, 0.006, 0.004], method=method, bounds=Bounds(lb=XLB, ub=XUB), options=method_options[method])
 
     with open(full_log_path, "a") as f:
         f.write(f"\n\tend time: {datetime.now()}\n")

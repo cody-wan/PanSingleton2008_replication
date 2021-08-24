@@ -1,0 +1,6 @@
+writing to logs/1/SLSQP/China/2021_8_4_19_20
+Inequality constraints incompatible    (Exit mode 4)
+            Current function value: 1430776939.9889157
+            Iterations: 1
+            Function evaluations: 8
+            Gradient evaluations: 1

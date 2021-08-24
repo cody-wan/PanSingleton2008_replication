@@ -1,0 +1,6 @@
+writing to logs/AEJ_data/2/SLSQP/Russia/2021_8_10_23_30
+Optimization terminated successfully    (Exit mode 0)
+            Current function value: -1172.9249222743435
+            Iterations: 68
+            Function evaluations: 846
+            Gradient evaluations: 67

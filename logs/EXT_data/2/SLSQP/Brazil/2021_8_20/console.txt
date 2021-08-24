@@ -1,0 +1,6 @@
+writing to logs/EXT_data/2/SLSQP/Brazil/2021_8_20
+Optimization terminated successfully    (Exit mode 0)
+            Current function value: 25822.957652141264
+            Iterations: 5
+            Function evaluations: 8
+            Gradient evaluations: 1
