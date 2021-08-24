@@ -1,9 +1,3 @@
-## TODO
-1. `PDE()`: boundary values of B at lower-right corner, when i=200. not sure why `X(100)` (mid value on X grid) is used, not `X(200)` (final value on X grid)
-2. not sure why `ln(deriv)` is part of the likelihood function. `derive` measures the slope, $\frac{\text{change in CDS spread}}{\text{change in default intensity value}}$. Since default intensity is evenly spaced out on the grid, `derive` essentially measures the increase in CDS spread as default probability increases. If this is part of the likelihood function, then it seeks to find parameters that yields model CDS spread within the interval with the largest increase in CDS spread over each additional increase in default intensity (?). 
-
-
-
 # CDS
 
 CDS spread is how much the protection buyer pays periodically (assuming $1 face value) in exchange for the recovery of losses from the protection seller in the event of a default. 
@@ -235,4 +229,3 @@ ln \lambda_t \sim \mathcal{N}\left(\ln \lambda_t e^{-\frac{\text{BET}}{12}} + \f
 ```python
 TOTAL = TOTAL - np.log(deriv)
 ```
-Not entirely sure yet why this is part of the likelihood function. See TODO #2 at front of page. 
