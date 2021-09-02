@@ -14,6 +14,7 @@ TOTAL_COUNTRY_NAMES = ['Brazil', 'Bulgaria', 'Chile', 'China', 'Colombia',
                        'Poland', 'Russia', 'SAfrica', 'Thailand', 'Turkey']
 
 
+
 # helper functions
 @numba.jit(nopython=True)
 def diagonal_form(a, upper=1, lower=1):
@@ -231,11 +232,9 @@ def FUNC_NLLK(PARM, CDS1Y, CDS3Y, CDS5Y, PFILE, country_name,
         args:
             PARM: theta; 
             ICAR_1: country indicator
+            XB_FLAG: T/F; T: use X[99] same as fortran code, F: use X[199], mathematically correct
             LN_FLAG: boolean; T: include `ln(derive)` in log-likelihood, F: no
     """
-
-    # prepare data for FUNC_NLLK
-    # 1. date-aligned CDS 1Y, 3Y, 5Y data
 
     resQ, resP = [], []
 
@@ -317,8 +316,8 @@ def FUNC_NLLK(PARM, CDS1Y, CDS3Y, CDS5Y, PFILE, country_name,
         XLAM, CDS1X, CDS3X, CDS5X, DERIV = np.array(resQ).T
         CDS1XP, CDS3XP, CDS5XP = np.array(resP).T
         CDS_df = pd.DataFrame.from_dict(dict(XLAM=XLAM, CDS1Y=CDS1Y, CDS1X=CDS1X, CDS1XP=CDS1XP, 
-                                    CDS3=CDS3Y, CDS3X=CDS3X, CDS3XP=CDS3XP, 
-                                    CDS5=CDS5Y, CDS5X=CDS5X, CDS5XP=CDS5XP))
+                                                        CDS3Y=CDS3Y, CDS3X=CDS3X, CDS3XP=CDS3XP, 
+                                                        CDS5Y=CDS5Y, CDS5X=CDS5X, CDS5XP=CDS5XP))
         CDS_df.to_csv(f"{CDSLog_path}/{country_name}_CDS.csv", index=False)
 
     # write parameter value (at each function call/iteration)
@@ -347,7 +346,7 @@ def find_overlap(ICAR_1, DATA_V):
 
     # NOTE: make sure first len(TOTAL_COUNTRY_NAMES) countries in CDS files are the same as TOTAL_COUNTRY_NAMES
     CDS1Y.columns = TOTAL_COUNTRY_NAMES + list(CDS1Y.columns[len(TOTAL_COUNTRY_NAMES):])
-    CDS3Y.columns = TOTAL_COUNTRY_NAMES + list(CDS3Y.columns[len(TOTAL_COUNTRY_NAMES):])
+    CDS3Y.columns = TOTAL_COUNTRY_NAMES + list(CDS3Y.columns[len(TOTAL_COUNTRY_NAMES):]) 
     CDS5Y.columns = TOTAL_COUNTRY_NAMES + list(CDS5Y.columns[len(TOTAL_COUNTRY_NAMES):])
 
     country_names = [val for val in CDS1Y.columns.tolist() if val in CDS3Y.columns.tolist() and val in CDS5Y.columns.tolist()]

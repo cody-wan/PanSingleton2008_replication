@@ -58,7 +58,7 @@ def func(CDS1Y, CDS3Y, CDS5Y, PFILE, country_name, BATCH_NUM, XB_FLAG, LN_FLAG, 
 
     log_file_path = f"logs/{DATA_V}/{BATCH_NUM}/{method}/{country_name}/{now.year}_{now.month}_{now.day}"
     # make folder
-    pathlib.Path(f"{log_file_path}").mkdir(parents=True, exist_ok=True)
+    pathlib.Path(log_file_path).mkdir(parents=True, exist_ok=True)
     log_csv_path = f"{log_file_path}/log.csv"
 
     # redirect console output to local file (for record-keeping)
@@ -90,10 +90,11 @@ if __name__ == "__main__":
 
     # read specifications:
     methods = ['trust-constr', 'SLSQP']
-    country_nums = [i for i in range(15)]
+    # country_nums = [i for i in range(15)]
 
     batch_file = sys.argv[1]
     DATA_V = sys.argv[2]
+    country_nums = [i for i in range(int(sys.argv[3]))] # 41 MKT; 15 AEJ
 
     BATCH_NUM, XB_FLAG, LN_FLAG = pd.read_csv(f"inputs/{DATA_V}/{batch_file}").iloc[0]
 
@@ -102,6 +103,8 @@ if __name__ == "__main__":
     for country_i in country_nums:
         for method in methods:
             CDS1Y, CDS3Y, CDS5Y, PFILE, country_name = main.get_input(country_i, DATA_V=DATA_V)
+            if len(PFILE) < 50:
+                continue
             processes.append(multiprocessing.Process(target=func, args=(CDS1Y, CDS3Y, CDS5Y, PFILE, country_name, BATCH_NUM, XB_FLAG, LN_FLAG, method,)))
 
     for p in processes:
